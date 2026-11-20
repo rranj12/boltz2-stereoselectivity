@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Large upstream archives and raw inference output stay out of git.
+data/external/*
+!data/external/.gitkeep
+results/
+!data/external/SOURCES.md

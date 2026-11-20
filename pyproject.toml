@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stereobench"
+version = "0.1.0"
+description = "Does Boltz-2's affinity head respond to stereochemistry?"
+requires-python = ">=3.10"
+dependencies = ["rdkit", "pandas"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stereobench"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
