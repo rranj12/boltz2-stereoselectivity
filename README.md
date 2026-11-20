@@ -3,9 +3,9 @@
 **Does Boltz-2's affinity head respond to stereochemistry?**
 
 Enantiomers are the cleanest possible probe of a structure-based affinity model.
-Identical atoms, identical bonds, identical formula, identical 2D graph — mirror-image
+Identical atoms, identical bonds, identical formula, identical 2D graph, but mirror-image
 geometry. Experimentally, one enantiomer frequently binds far more tightly than the other.
-If Boltz-2 assigns them the same affinity, the head is reading chemistry, not shape.
+If Boltz-2 assigns them the same affinity, the head is reading chemistry and not shape.
 
 There is a second, already-documented failure to attach this to: Boltz-2 often generates the
 wrong enantiomer from a stereo-specified SMILES. That allows the paired question — *when the
@@ -13,13 +13,12 @@ geometry comes out mirrored, does the predicted affinity follow the geometry or 
 string?*
 
 Existing probes of Boltz-2's coordinate sensitivity have all worked the protein side
-(mutate the pocket, shuffle targets) or substituted whole poses. Nobody has held the 2D
-graph fixed and changed only the 3D.
+(mutate the pocket, shuffle targets) or substituted whole poses. 
 
 ## Status
 
-Early. The verification and evaluation core is implemented and tested; the curated pair set
-is not built yet, and no inference has been run. See *Open questions* — two of them bear on
+The verification and evaluation core is implemented and tested; the curated pair set
+is not built yet and no inference has been run. See *Open questions* ; two of them bear on
 whether the experiment is interpretable at all, and both are read-only questions about the
 Boltz source.
 
