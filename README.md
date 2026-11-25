@@ -78,9 +78,21 @@ sign convention — `Affinity.pic50` converts):
 
 - **sign accuracy** — does the predicted direction match experiment?
 - **Δ correlation** — predicted vs experimental magnitude
-- **the key conditional** — when the *realized* geometry is identical between the two
-  members, does |Δpredicted| collapse to ~0? A geometry-driven head must be flat here.
-  A non-zero Δ means the number came from somewhere other than the coordinates.
+- **the key conditional, now three-way** — matched realized geometry is necessary but no longer
+  sufficient, because finding 1 opened a second coordinate channel. `metrics.Pair` therefore
+  tracks both, and `conditional_state` reports which regime a pair is in:
+
+  | State | Reading |
+  |---|---|
+  | `geometry_differs` | Δ is expected; compare against experiment |
+  | `confounded_by_conformer` | matched poses, mirror-image reference conformers — **ambiguous**, Δ has two live explanations |
+  | `pose_channel_isolated` | both channels equalised — a geometry-driven head must be flat, and a non-zero Δ is genuinely unexplained |
+
+  An ordinary run reaches only the first two states: Boltz embeds each member from its own
+  SMILES, so their conformers always differ. The third state exists only if conformers are
+  substituted deliberately — which is why the crossover arm below is not optional.
+  `summarize` reports `mean_abs_delta_pred_isolated` as `None` when no pair reached it, and
+  that `None` must not be read as "no effect".
 
 ### The noise floor is not optional
 
@@ -110,8 +122,44 @@ IC50 variance can exceed the stereochemical effect. Censored values (`>`, `<`) a
 they are the likeliest source of the implausible fold-differences reported in archive-scale
 chirality datasets.
 
+### The crossover arm
+
+Finding 1 forces a third arm, and it is mechanistic rather than chemical: it uses no
+experimental measurement at all. `conformer.build_crossover` produces the 2×2 of molecular
+graph against reference-conformer handedness.
+
+|  | conformer R | conformer S |
+|---|---|---|
+| **SMILES R** | `a_native` | `a_crossed` |
+| **SMILES S** | `b_crossed` | `b_native` |
+
+Reflection is the right intervention because it is the *minimal* one: mirroring preserves every
+interatomic distance exactly, so Boltz's `embed_atompair_ref_dist` channel is bit-identical and
+only the displacement channel changes. A response therefore localises to one linear layer.
+
+Two implementation points that are easy to get wrong:
+
+- **All four arms descend from one embedding.** Embedding the two enantiomers separately, even
+  under one seed, lands them in different torsional minima — measured deviations exceed 1 Å.
+  The arms would then differ in shape as well as handedness and nothing could be attributed.
+  `test_independent_embedding_would_NOT_give_a_mirror_image` pins this down.
+- **A substituted mol must carry exactly one conformer.** The featuriser picks one at
+  `random.choice` (`featurizerv2.py:1193-1198`), so a mol with several reintroduces the
+  variance the arm exists to remove.
+
+What each outcome means:
+
+- Affinity tracks the **conformer** → the input channel is live, and the key conditional is
+  genuinely confounded.
+- Affinity tracks the **SMILES** → something downstream of the conformer carries it.
+- Affinity moves for **neither** → stereochemistry has no route to the head except the pose,
+  and the original design is clean exactly as written.
+
+The third outcome is the one worth hoping for: the test's best case *restores* the original
+experiment rather than complicating it.
+
 Candidate upstream sources are recorded in [`data/external/SOURCES.md`](data/external/SOURCES.md).
-Nothing is vendored yet.
+StereoAtlas is downloaded and the candidate table is built — see *Pair curation* below.
 
 ## Install
 

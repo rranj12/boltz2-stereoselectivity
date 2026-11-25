@@ -9,3 +9,10 @@ data/external/*
 !data/external/.gitkeep
 results/
 !data/external/SOURCES.md
+
+# Derived pair tables: regenerable from the archive via scripts/shortlist.py
+# and scripts/requalify.py. pilot.csv is small and IS tracked -- it is the
+# hand-checked set the results rest on.
+data/pairs/candidates.csv
+data/pairs/rejected.csv
+runs/
