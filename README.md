@@ -17,10 +17,34 @@ Existing probes of Boltz-2's coordinate sensitivity have all worked the protein 
 
 ## Status
 
-The verification and evaluation core is implemented and tested; the curated pair set
-is not built yet and no inference has been run. See *Open questions* ; two of them bear on
-whether the experiment is interpretable at all, and both are read-only questions about the
-Boltz source.
+The verification and evaluation core is implemented and tested. The upstream candidate archive
+is downloaded and its schema verified. The curated pair set is not built yet, and no inference
+has been run.
+
+**Done**
+
+- `stereobench.stereo` / `boltz_io` / `metrics` — implemented, unit-tested.
+- StereoAtlas acquired (Zenodo 23158759, CC BY 4.0), MD5s checked against the record manifest,
+  provenance recorded in `data/external/SOURCES.md`. Gitignored; re-fetch from the DOI.
+- Schema verified against the real headers rather than the paper. Two corrections matter:
+  the fold tables are **family-level and do not identify the two members**;
+  `TRUE_ISOMER_LITERATURE_CLEAN.csv` is the per-member table, joined on
+  `stereochemical_family_id` + `stereochemical_variant`. 60,462 of 65,780 fold rows resolve
+  both members to distinct ChEMBL ids.
+- Supply measured: ~14,000 tail candidates (Strong + Extreme) and ~26,000 near-zero candidates,
+  of which 32,481 are enantiomer candidates pending `classify_pair` confirmation. Upstream
+  censoring affects only 161 of 65,780 rows.
+
+**Blocking, in order**
+
+1. **Two read-only questions about the Boltz source** (see *Open questions*). Both bear on
+   whether the experiment is interpretable at all. Neither needs a GPU. Do these first — a
+   chiral atom feature in the ligand featuriser would change what any result can mean.
+2. **ChEMBL requalification pass.** No StereoAtlas file carries a per-member SMILES, an
+   `assay_chembl_id` or an activity qualifier. One API pass over the shortlist supplies all
+   three. `classify_pair` cannot run until it is done, so there is no `curate` module yet.
+3. **Noise floor σ.** Measure before curating the full set; it sets the replicate count for
+   every later run.
 
 ## What's here
 
