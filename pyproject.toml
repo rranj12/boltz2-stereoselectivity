@@ -17,3 +17,7 @@ packages = ["src/stereobench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `scripts` is on the path so the run-building scripts can be tested. They are
+# entry points rather than library code, but the code that writes run.sh and
+# the YAMLs is exactly the code whose mistakes are expensive to find at a GPU.
+pythonpath = ["src", "scripts"]
