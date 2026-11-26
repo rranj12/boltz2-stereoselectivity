@@ -34,12 +34,14 @@ has been run.
 - Supply measured: ~14,000 tail candidates (Strong + Extreme) and ~26,000 near-zero candidates,
   of which 32,481 are enantiomer candidates pending `classify_pair` confirmation. Upstream
   censoring affects only 161 of 65,780 rows.
+- **Boltz source audited** at `v2.2.1` (`b1ebfc4`). Both open questions are answered and a
+  third channel was found that the original framing missed — see *Source findings*.
 
 **Blocking, in order**
 
-1. **Two read-only questions about the Boltz source** (see *Open questions*). Both bear on
-   whether the experiment is interpretable at all. Neither needs a GPU. Do these first — a
-   chiral atom feature in the ligand featuriser would change what any result can mean.
+1. **Affinity-stage coordinate capture.** Confirmed necessary: the affinity head scores
+   coordinates it diffuses itself, and nothing writes them to disk. Without a patched Boltz
+   there is no checkpoint 3 and the key conditional cannot be evaluated.
 2. **ChEMBL requalification pass.** No StereoAtlas file carries a per-member SMILES, an
    `assay_chembl_id` or an activity qualifier. One API pass over the shortlist supplies all
    three. `classify_pair` cannot run until it is done, so there is no `curate` module yet.
@@ -76,18 +78,36 @@ sign convention — `Affinity.pic50` converts):
 
 - **sign accuracy** — does the predicted direction match experiment?
 - **Δ correlation** — predicted vs experimental magnitude
-- **the key conditional** — when the *realized* geometry is identical between the two
-  members, does |Δpredicted| collapse to ~0? A geometry-driven head must be flat here.
-  A non-zero Δ means the number came from somewhere other than the coordinates.
+- **the key conditional, now three-way** — matched realized geometry is necessary but no longer
+  sufficient, because finding 1 opened a second coordinate channel. `metrics.Pair` therefore
+  tracks both, and `conditional_state` reports which regime a pair is in:
+
+  | State | Reading |
+  |---|---|
+  | `geometry_differs` | Δ is expected; compare against experiment |
+  | `confounded_by_conformer` | matched poses, mirror-image reference conformers — **ambiguous**, Δ has two live explanations |
+  | `pose_channel_isolated` | both channels equalised — a geometry-driven head must be flat, and a non-zero Δ is genuinely unexplained |
+
+  An ordinary run reaches only the first two states: Boltz embeds each member from its own
+  SMILES, so their conformers always differ. The third state exists only if conformers are
+  substituted deliberately — which is why the crossover arm below is not optional.
+  `summarize` reports `mean_abs_delta_pred_isolated` as `None` when no pair reached it, and
+  that `None` must not be read as "no effect".
 
 ### The noise floor is not optional
 
-The headline result is a null, and a null is unreadable without a noise floor. Boltz-2
-exposes **no seed flag**, so repeated runs of one input differ by some σ. If σ is 0.4 log
-units and the pairs differ by 0.3, there is no finding in either direction. `noise_sigma`
-measures it from replicate runs of identical inputs, and every threshold is derived from it
-rather than chosen by hand. Measure σ before curating the full pair set — it sets the
-replicate count for every later run.
+The headline result is a null, and a null is unreadable without a noise floor. Boltz-2 **does**
+expose `--seed` (`main.py:919`), but it **defaults to None — no seeding** (`main.py:1102`), so
+out of the box repeated runs of one input differ by some σ. If σ is 0.4 log units and the pairs
+differ by 0.3, there is no finding in either direction. `noise_sigma` measures it, and every
+threshold is derived from it rather than chosen by hand. Measure σ before curating the full pair
+set — it sets the replicate count for every later run.
+
+Two sources of run-to-run variance, and the seed covers both: the diffusion noise, and the
+**random choice of input conformer** (`featurizerv2.py:1193-1198`, unseeded `random.choice`)
+plus the **random roto-translation applied to it** (`featurizerv2.py:1494-1499`). Measure σ by
+varying `--seed` over a fixed input rather than by rerunning unseeded — same quantity, but
+reproducible and attributable.
 
 ## Pair-set design
 
@@ -102,8 +122,44 @@ IC50 variance can exceed the stereochemical effect. Censored values (`>`, `<`) a
 they are the likeliest source of the implausible fold-differences reported in archive-scale
 chirality datasets.
 
+### The crossover arm
+
+Finding 1 forces a third arm, and it is mechanistic rather than chemical: it uses no
+experimental measurement at all. `conformer.build_crossover` produces the 2×2 of molecular
+graph against reference-conformer handedness.
+
+|  | conformer R | conformer S |
+|---|---|---|
+| **SMILES R** | `a_native` | `a_crossed` |
+| **SMILES S** | `b_crossed` | `b_native` |
+
+Reflection is the right intervention because it is the *minimal* one: mirroring preserves every
+interatomic distance exactly, so Boltz's `embed_atompair_ref_dist` channel is bit-identical and
+only the displacement channel changes. A response therefore localises to one linear layer.
+
+Two implementation points that are easy to get wrong:
+
+- **All four arms descend from one embedding.** Embedding the two enantiomers separately, even
+  under one seed, lands them in different torsional minima — measured deviations exceed 1 Å.
+  The arms would then differ in shape as well as handedness and nothing could be attributed.
+  `test_independent_embedding_would_NOT_give_a_mirror_image` pins this down.
+- **A substituted mol must carry exactly one conformer.** The featuriser picks one at
+  `random.choice` (`featurizerv2.py:1193-1198`), so a mol with several reintroduces the
+  variance the arm exists to remove.
+
+What each outcome means:
+
+- Affinity tracks the **conformer** → the input channel is live, and the key conditional is
+  genuinely confounded.
+- Affinity tracks the **SMILES** → something downstream of the conformer carries it.
+- Affinity moves for **neither** → stereochemistry has no route to the head except the pose,
+  and the original design is clean exactly as written.
+
+The third outcome is the one worth hoping for: the test's best case *restores* the original
+experiment rather than complicating it.
+
 Candidate upstream sources are recorded in [`data/external/SOURCES.md`](data/external/SOURCES.md).
-Nothing is vendored yet.
+StereoAtlas is downloaded and the candidate table is built — see *Pair curation* below.
 
 ## Install
 
@@ -119,42 +175,97 @@ out to the `boltz predict` CLI. See [jwohlwend/boltz](https://github.com/jwohlwe
 
 ## Boltz-2 interface notes
 
-From the Boltz prediction docs, since these shape the harness:
+Verified against the source at `v2.2.1` (`b1ebfc4`), not just the docs:
 
 - Steering potentials are **`--use_potentials`, a flag that defaults to OFF**. There is no
-  `--no_potentials`; the unsteered arm is the default arm.
+  `--no_potentials`; the unsteered arm is the default arm. **But it does not reach the affinity
+  stage**: that stage hard-disables `fk_steering`, `physical_guidance_update` and
+  `contact_guidance_update` regardless of the flag (`main.py:1387-1389`). Steering can only
+  change the structure handed to the affinity stage, never the geometry the affinity head scores.
 - Affinity emits **one `affinity_<name>.json` per input**, not per diffusion sample.
   `affinity_pred_value` is log10(IC50) with IC50 in µM, so **lower is stronger**.
-- `--diffusion_samples_affinity` (default 5) is separate from `--diffusion_samples` (default 1).
-- Affinity takes **exactly one ligand chain**, ≤128 atoms, with ≤56 recommended.
+- `--diffusion_samples_affinity` (**default 3**, `main.py:1054`) is separate from
+  `--diffusion_samples`, and `--sampling_steps_affinity` defaults to 200 (`main.py:1053`).
+- Affinity takes **exactly one ligand chain**, ≤128 atoms, with ≤56 recommended — enforced in
+  `parse/schema.py:1266-1272`, matching `boltz_io`'s limits.
+- `affinity_pred_value` carries a **molecular-weight correction** applied after the ensemble
+  average (`boltz2.py:688-697`). MW is identical between enantiomers, so it cancels in Δ — but
+  it means the reported number is not the raw head output.
 - Both members of a pair must be given the **same MSA**. The protein is identical between
   enantiomers; a differing MSA would inject a difference unrelated to stereochemistry.
 
-## Open questions
+## Source findings
 
-These are unresolved and both are answerable by reading the Boltz source. Neither has been
-checked yet.
+Read at `jwohlwend/boltz` `v2.2.1` (`b1ebfc4`), 2026-11-25. Line numbers are that commit.
+Both original open questions are answered, and a third channel turned up that the original
+framing did not account for.
 
-**1. Can the affinity head read stereochemistry without geometry?** Enantiomers have different
-isomeric SMILES. If Boltz-2's ligand featurization carries a chiral tag or CIP code as an *atom
-feature*, stereochemistry reaches the affinity head through a 2D channel that never passes
-through coordinates — and a positive result would not demonstrate 3D sensitivity. If there is
-no such feature, stereo information can only arrive via coordinates, which makes the
-experiment clean.
+### 1. No chiral atom feature reaches the model — but chirality still arrives without the pose
 
-**2. Does the affinity module use the structure you inspected?** The separate
-`--diffusion_samples_affinity` suggests the affinity module runs its own diffusion pass rather
-than consuming the ranked structure from the main run. If so, the stereochemistry in the output
-CIF is *not* the geometry the affinity head saw, and the paired question needs the
-affinity-stage coordinates instead — which the CLI does not write out.
+The featuriser **does** compute a chiral tag per atom: `ref_chirality`, built from
+`GetChiralTag()` over the reference mol (`featurizerv2.py:1227-1231, 1436`) and placed in the
+feature dict (`featurizerv2.py:1549`). It is then **never read**. The only consumers of atom
+reference features are the atom encoders, which take `ref_pos`, `ref_charge`, `ref_element`,
+`ref_atom_name_chars` and `ref_space_uid` (`encodersv2.py:313-325`, `encoders.py:404-425`);
+`ref_chirality` appears nowhere under `src/boltz/model/`. So there is no 2D chiral-tag channel.
+
+**That is not the end of it.** `ref_pos` is the **RDKit ETKDGv3 reference conformer**, embedded
+from the input SMILES with `AddHs` (`parse/schema.py:1242-1258`, `compute_3d_conformer` at
+`:200-250`). ETKDG honours the chiral tags, so **two enantiomers get mirror-image reference
+conformers**. The atom encoder embeds pairwise displacement vectors between reference-conformer
+atoms through a plain `LinearNoBias(3, atom_z)` (`encodersv2.py:263, 354-381`), which is not
+reflection-invariant. The augmentation applied beforehand is a **proper** rotation —
+`randomly_rotate` → `random_rotations` (`modules/utils.py:68-76, 99-104`), det +1 — so it
+scrambles orientation but preserves handedness.
+
+Consequence for the experiment: stereochemistry can reach the affinity head **through the input
+conformer**, on a path that never passes through the predicted pose. A non-zero Δ under the key
+conditional therefore does not by itself prove the head is reading its scored coordinates — the
+conformer is a live alternative explanation. Distinguishing them needs a third arm: hold the
+input SMILES fixed and substitute the reference conformer, or supply both members with the same
+conformer. This is a new requirement, not in the original design.
+
+### 2. Confirmed — the affinity head scores its own, unwritten coordinates
+
+The affinity stage is a **second, separate `trainer.predict` run** against a **different
+checkpoint**, `boltz2_aff.ckpt` (`main.py:1370-1410`). It takes the rank-0 structure from the
+first run as input — written as `pre_affinity_<id>.npz` (`write/writer.py:178-180`), loaded at
+`module/inferencev2.py:62-64` — and then **runs its own trunk and its own diffusion** over it
+(`recycling_steps=5`, `sampling_steps_affinity`, `diffusion_samples_affinity`;
+`main.py:1372-1379`).
+
+The head is then fed the best sample from *that* pass, ranked by ipTM:
+
+```python
+argsort = torch.argsort(dict_out["iptm"], descending=True)
+best_idx = argsort[0].item()
+coords_affinity = dict_out["sample_atom_coords"].detach()[best_idx][None, None]
+```
+`model/models/boltz2.py:622-626`
+
+`BoltzAffinityWriter` writes **only the JSON summary** — no structure at all
+(`write/writer.py:292-330`). So the stereochemistry in the output CIF is from the *structure*
+model and is **not** what the affinity head saw. Checkpoint 3 is unreachable with a stock
+install, exactly as suspected.
+
+**Capture point for the patch:** `coords_affinity` at `boltz2.py:624`, or equivalently
+`dict_out["sample_atom_coords"][best_idx]`. Atom identity and ordering come from the same
+`feats`, so a dump there plus the existing structure npz is enough to rebuild the ligand.
+
+### 3. Determinism
+
+`--seed` exists (`main.py:919`) and defaults to None (`main.py:1101-1103`). Unseeded, two runs
+of one input differ. See *The noise floor is not optional* for what that implies and for the two
+distinct variance sources.
 
 ### Verification checkpoints
 
 | Checkpoint | Reachable? |
 |---|---|
+| 0. Input conformer — what geometry did ETKDG hand the trunk? | yes, but only by re-embedding; not written out. **Newly relevant — see finding 1** |
 | 1. Parsed input — did the requested R/S enter correctly? | yes, RDKit on the input SMILES |
 | 2. Predicted complex — did structure generation preserve it? | yes, `AssignStereochemistryFrom3D` on the output CIF |
-| 3. Affinity-stage complex — did the affinity pass preserve it? | **no** — not written to disk; see open question 2 |
+| 3. Affinity-stage complex — did the affinity pass preserve it? | **not without a patch** — confirmed never written; capture at `boltz2.py:624` |
 | 4. Affinity output — right direction and magnitude? | yes, `affinity_<name>.json` |
 
 ## Prior work
