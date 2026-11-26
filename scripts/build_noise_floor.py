@@ -52,6 +52,13 @@ def main() -> None:
     ap.add_argument("--replicates", type=int, default=8)
     ap.add_argument("--base-seed", type=int, default=2000)
     ap.add_argument("--embed-seed", type=int, default=0xC0FFEE)
+    ap.add_argument(
+        "--max-chain-length",
+        type=int,
+        default=700,
+        help="sigma should be cheap to measure; long chains make it the most "
+        "expensive run in the project rather than the first one",
+    )
     args = ap.parse_args()
 
     if not args.sequences.exists():
@@ -62,6 +69,10 @@ def main() -> None:
     sequences = json.loads(args.sequences.read_text())
     pairs = pd.read_csv(args.pairs)
     pairs = pairs[pairs.target_chembl_id.isin(sequences)]
+    pairs = pairs[
+        pairs.target_chembl_id.map(lambda t: len(sequences[t]))
+        <= args.max_chain_length
+    ]
 
     # Distinct targets: a noise floor measured on three ligands against one
     # protein would describe that protein, not the model.

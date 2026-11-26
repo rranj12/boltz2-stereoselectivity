@@ -145,14 +145,32 @@ def main() -> None:
         "file, which lets the arms of a pair differ in their alignment.",
     )
     ap.add_argument("--base-seed", type=int, default=1000)
+    ap.add_argument(
+        "--max-chain-length",
+        type=int,
+        default=700,
+        help="prefer short targets for a pilot. Boltz's runtime and memory "
+        "both scale badly with chain length, and the pair set reaches 1988 "
+        "residues -- a handful of those would dominate the whole run.",
+    )
     args = ap.parse_args()
 
     pairs = pd.read_csv(args.pairs)
     sequences = json.loads(args.sequences.read_text()) if args.sequences.exists() else {}
 
-    usable = pairs[pairs.target_chembl_id.isin(sequences)].head(args.max_pairs)
-    skipped = len(pairs) - len(pairs[pairs.target_chembl_id.isin(sequences)])
-    print(f"pairs with a sequence: {len(usable)} (skipped {skipped} without one)")
+    have_sequence = pairs[pairs.target_chembl_id.isin(sequences)]
+    skipped = len(pairs) - len(have_sequence)
+
+    short_enough = have_sequence[
+        have_sequence.target_chembl_id.map(lambda t: len(sequences[t]))
+        <= args.max_chain_length
+    ]
+    usable = short_enough.head(args.max_pairs)
+    print(
+        f"pairs with a sequence: {len(have_sequence)} (skipped {skipped} without one)\n"
+        f"  under {args.max_chain_length} residues: {len(short_enough)}\n"
+        f"  taking: {len(usable)}"
+    )
 
     def msa_for(target_chembl_id: str) -> str | None:
         """The cached MSA path for a target, or None to fall back to the server."""
