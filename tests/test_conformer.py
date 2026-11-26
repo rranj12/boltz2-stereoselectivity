@@ -250,3 +250,46 @@ def test_get_coords_requires_a_conformer():
     mol = Chem.MolFromSmiles(ACHIRAL)
     with pytest.raises(ValueError, match="no conformer"):
         get_coords(mol)
+
+
+# --- over-specification regression -----------------------------------------
+#
+# `reflect_molecule` used to update the graph with
+# `AssignStereochemistryFrom3D`, which tags every atom whose neighbours are
+# distinguishable in 3D. That over-specifies relative to the input SMILES, and
+# the extra tags reach the canonical SMILES, so `build_crossover`'s enantiomer
+# check rejected molecules that were perfectly correct. It cost 10% of the
+# pair set, silently, at run-build time.
+
+ADAMANTYL_R = "C[C@@H](OC(=O)C12CC3CC(CC(C3)C1)C2)c1ccncc1"
+ADAMANTYL_S = "C[C@H](OC(=O)C12CC3CC(CC(C3)C1)C2)c1ccncc1"
+
+
+def test_reflecting_a_caged_molecule_reproduces_its_enantiomer():
+    """The adamantyl bridgeheads must not acquire tags the input never had."""
+    mol = build_reference_conformer(ADAMANTYL_R, seed=SEED)
+    produced = Chem.MolToSmiles(Chem.RemoveHs(Chem.Mol(reflect_molecule(mol))))
+    assert produced == Chem.MolToSmiles(Chem.MolFromSmiles(ADAMANTYL_S))
+
+
+def test_crossover_accepts_a_caged_enantiomer_pair():
+    arms = build_crossover(ADAMANTYL_R, ADAMANTYL_S, seed=SEED, axis=0)
+    assert len(arms) == 4
+
+
+def test_reflection_does_not_add_stereocentres_to_the_graph():
+    """Mirroring changes handedness, never how specified the molecule is."""
+    mol = build_reference_conformer(ADAMANTYL_R, seed=SEED)
+    assert set(graph_labels(reflect_molecule(mol))) == set(graph_labels(mol))
+
+
+def test_reflection_inverts_every_specified_centre():
+    mol = build_reference_conformer(ADAMANTYL_R, seed=SEED)
+    before, after = graph_labels(mol), graph_labels(reflect_molecule(mol))
+    assert before and all(after[k] != v for k, v in before.items())
+
+
+def test_the_enantiomer_guard_still_rejects_a_non_pair():
+    """The fix must not have bought its coverage by weakening the check."""
+    with pytest.raises(ValueError, match="not enantiomers"):
+        build_crossover(ADAMANTYL_R, "C[C@H](O)c1ccccc1", seed=SEED, axis=0)

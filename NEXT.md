@@ -7,7 +7,12 @@ it says otherwise.
 
 The mechanistic arm is built, tested, and **de-risked** — conformer
 substitution reaches Boltz with no fork required, verified against a real
-install. The pair set is curating. Nothing has been run through Boltz itself.
+install. The pair set is in hand: 261 pairs, all 261 of which now build a
+crossover. Nothing has been run through Boltz itself.
+
+The Boltz install used for verification lives in this session's scratchpad
+under `/private/tmp`, which is cleared on reboot. Reinstall it somewhere
+durable before relying on it.
 
 ## What got answered
 
@@ -40,22 +45,48 @@ real data either.
 PYTHONPATH=src /path/to/boltz-venv/bin/python scripts/verify_substitution.py
 ```
 
+```bash
+PYTHONPATH=src /path/to/boltz-venv/bin/python scripts/preflight.py
+```
+
 Then, smallest useful experiment first:
 
 **1. Noise floor, before anything else.** It is the go/no-go gate. If σ is
 0.5 pAct and pairs differ by 0.3, there is no finding in either direction and
-no amount of curation rescues it. Three ligands, 5–10 replicates varying
-`--seed`. An hour of GPU.
+no amount of curation rescues it. An hour of GPU.
+
+```bash
+.venv/bin/python scripts/build_noise_floor.py --msa-dir data/msa
+cp runs/noise_floor/mols/*.pkl ~/.boltz/mols/
+runs/noise_floor/run.sh
+```
+
+Two arms, deliberately. `substituted` pins the reference conformer, so only
+Boltz's own stochasticity varies — that is the floor the crossover is measured
+against. `native` lets Boltz embed its own conformer, which is additionally
+unseeded. The gap between the two σ values *is* the contribution of the
+unseeded conformer, which is the quantity the mechanistic arm is about.
 
 **2. The crossover, on 3–5 pairs.** The headline experiment. Needs no
 experimental data, so it does not wait on curation.
 
 ```bash
-.venv/bin/python scripts/build_run.py --mode crossover --max-pairs 5 --replicates 3
-cp runs/pilot/mols/*.pkl ~/.boltz/mols/
+PYTHONPATH=src /path/to/boltz-venv/bin/python scripts/fetch_msas.py --max-targets 8
 ```
 
-Then run Boltz over `runs/pilot/inputs/*.yaml` and:
+```bash
+.venv/bin/python scripts/build_run.py --mode crossover --max-pairs 5 --replicates 3 --msa-dir data/msa
+cp runs/pilot/mols/*.pkl ~/.boltz/mols/
+runs/pilot/run.sh
+```
+
+`run.sh` is generated from the manifest, one `boltz predict` per input carrying
+the seed the manifest records. Do not run the YAMLs by hand: `--seed` is a CLI
+flag and not a YAML field, so by-hand runs leave the manifest's seeds fictional
+and the replicates either unseeded or mislabelled. It skips inputs whose output
+directory exists, so it resumes.
+
+Then:
 
 ```bash
 .venv/bin/python scripts/analyze.py
@@ -89,6 +120,12 @@ half-solving it.
   CIF is checkpoint 2.
 - **`pilot.csv` pairs are same-assay but not same-lab-protocol verified.**
   One assay id is a strong constraint, not a perfect one.
+- **The MSA must be shared across a pair's arms.** With `--use_msa_server`,
+  Boltz generates one per input file, so the four arms of a pair can be
+  conditioned on different alignments — variance injected into exactly the
+  comparison being measured, and invisible in the output. `fetch_msas.py`
+  generates one per target and `build_run.py --msa-dir` points every arm at it.
+  `build_run.py` warns when run without it.
 - **ETKDG is unseeded inside Boltz.** `compute_3d_conformer` never sets
   `options.randomSeed`, so Boltz's own reference conformers vary run to run
   independently of `--seed`. Substituted mols remove this; native arms do not.
@@ -100,7 +137,10 @@ half-solving it.
 | `scripts/shortlist.py` | StereoAtlas → candidate pairs | the two CSVs (downloaded) |
 | `scripts/requalify.py` | ChEMBL → SMILES, assay, qualifier → `pilot.csv` | network |
 | `scripts/fetch_sequences.py` | ChEMBL target → UniProt sequence | network |
-| `scripts/build_run.py` | pairs → YAMLs, substituted mols, manifest | — |
+| `scripts/fetch_msas.py` | one MSA per target, cached | network + Boltz |
+| `scripts/build_run.py` | pairs → YAMLs, substituted mols, manifest, `run.sh` | — |
+| `scripts/build_noise_floor.py` | replicate inputs for σ, both arms | — |
+| `scripts/preflight.py` | catches what fails 20 min into a GPU session | Boltz for the deep checks |
 | `scripts/verify_substitution.py` | proves substitution reaches Boltz | Boltz installed |
 | `scripts/analyze.py` | outputs → pilot table + metrics | a run, or `--synthetic` |
 
@@ -122,6 +162,15 @@ they agree on the verdict and disagree on the key, which reads as "the centres
 do not correspond". Use `structure.template_labels` /
 `template_conformer_labels` to get both sides into one space. Two tests
 already caught this; it will try again.
+
+**Over-specifying stereochemistry.** `AssignStereochemistryFrom3D` tags every
+atom whose neighbours are distinguishable in 3D, including atoms no
+stereocentre supports — adamantyl bridgeheads are the common case. The mol is
+still correct, but it no longer prints as the SMILES it came from, so an
+identity check against the input string fails. This cost 10% of the pair set
+before it was found, silently, at run-build time. `reflect_molecule` now
+inverts the existing chiral tags instead, which keeps the specification exactly
+as specific as the input was.
 
 **One conformer per substituted mol.** The featuriser picks one at
 `random.choice` (`featurizerv2.py:1193-1198`), so a multi-conformer mol

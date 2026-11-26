@@ -194,9 +194,33 @@ def reflect_molecule(mol: Chem.Mol, *, axis: int = DEFAULT_REFLECT_AXIS) -> Chem
     coordinates, and they differ only in whether the graph was updated to
     match. Comparing them separates a response to the conformer from a response
     to the graph.
+
+    The graph is updated by inverting the chiral tags that are already there,
+    not by re-reading stereochemistry out of the mirrored coordinates. The
+    distinction matters. `AssignStereochemistryFrom3D` assigns a tag to every
+    atom whose neighbours it can tell apart in 3D, which over-specifies the
+    molecule relative to the SMILES it came from -- an adamantyl cage is the
+    common case, where RDKit tags four bridgeheads that the input left bare and
+    that no stereocentre supports. The resulting mol is still the right
+    molecule, but it no longer prints as the SMILES it should, which made the
+    enantiomer check below reject 10% of the pair set.
+
+    Inverting existing tags keeps the specification exactly as specific as the
+    input was, and it is the correct operation besides: reflection inverts the
+    parity at every specified centre, and a tag is defined relative to the
+    atom's neighbour ordering, which reflection does not touch. Double-bond
+    stereochemistry is deliberately left alone, since a mirror does not
+    exchange E and Z.
     """
     out = reflect_conformer_only(mol, axis=axis)
-    Chem.AssignStereochemistryFrom3D(out)
+    inverted = {
+        Chem.ChiralType.CHI_TETRAHEDRAL_CW: Chem.ChiralType.CHI_TETRAHEDRAL_CCW,
+        Chem.ChiralType.CHI_TETRAHEDRAL_CCW: Chem.ChiralType.CHI_TETRAHEDRAL_CW,
+    }
+    for atom in out.GetAtoms():
+        flipped = inverted.get(atom.GetChiralTag())
+        if flipped is not None:
+            atom.SetChiralTag(flipped)
     return out
 
 

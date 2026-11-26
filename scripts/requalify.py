@@ -58,17 +58,17 @@ def main() -> None:
     rows, rejects = [], []
 
     def reject(row, reason: str) -> None:
+        # No cutoff flag here: a rejected row has no agreed measurement to
+        # flag. An earlier version read `eu_value`/`di_value` from the
+        # enclosing scope, which are bound further down the loop -- so the
+        # first rejection raised NameError and every later one silently
+        # recorded the PREVIOUS pair's values.
         rejects.append(
             {
                 "eutomer_chembl_id": row.eutomer_chembl_id,
                 "distomer_chembl_id": row.distomer_chembl_id,
                 "target_chembl_id": row.target_chembl_id,
                 "group": row.group,
-                # Flagged, not dropped: an "inactive at top concentration"
-                # reading often reaches ChEMBL with relation "=", so the
-                # qualifier filter cannot catch it.
-                "suspicious_cutoff": looks_like_a_cutoff(eu_value)
-                or looks_like_a_cutoff(di_value),
                 "reason": reason,
             }
         )
@@ -124,7 +124,7 @@ def main() -> None:
         if shared is None:
             reject(row, "no_shared_uncensored_assay")
             continue
-        eu_m, di_m = shared
+        eu_m, di_m = shared.eutomer, shared.distomer
 
         # Potency is decided by the shared assay, not by the archive's mean,
         # so the eutomer may swap sides here. Lower nM is stronger.
@@ -168,6 +168,11 @@ def main() -> None:
                 "suspicious_cutoff": looks_like_a_cutoff(eu_value)
                 or looks_like_a_cutoff(di_value),
                 "document_chembl_id": eu_m.document_chembl_id,
+                # How much choosing was involved. 1 shared assay means the
+                # pair was not selected at all; several means it was, and the
+                # reader should be able to tell those apart.
+                "n_shared_assays": shared.n_shared_assays,
+                "n_measurements": shared.n_measurements,
             }
         )
 
@@ -194,6 +199,10 @@ def main() -> None:
         near_two = (pairs.delta_pact.sub(0.30103).abs() < 0.01).sum()
         print(f"within 0.01 of exactly 2x  : {near_two}"
               "   <- a large count means the arms were sampled at a tier edge")
+        chose = (pairs.n_shared_assays > 1).sum()
+        print(f"had >1 candidate assay     : {chose} "
+              f"({chose / len(pairs):.0%}) <- the only rows the assay-choice "
+              "rule could have biased")
     print(f"\nrejections: {len(rejects)}")
     if rejects:
         print(pd.DataFrame(rejects).reason.str.split(":").str[0].value_counts().to_string())

@@ -20,6 +20,7 @@ Read-only, public, unauthenticated. Nothing identifying is sent.
 from __future__ import annotations
 
 import json
+import math
 import ssl
 import time
 import urllib.error
@@ -144,16 +145,48 @@ def fetch_activities(
     return out
 
 
+@dataclass(frozen=True)
+class SharedAssay:
+    """The chosen assay, plus what the choice was made from.
+
+    `n_shared_assays` and `n_measurements` exist so the selection can be
+    audited after the fact. A pair resolved from a single candidate assay was
+    not selected at all; one resolved from six was, and the reader deserves to
+    know which they are looking at.
+    """
+
+    eutomer: "Measurement"
+    distomer: "Measurement"
+    n_shared_assays: int
+    n_measurements: int
+
+
 def find_shared_assay(
     eutomer: list[Measurement], distomer: list[Measurement]
-) -> tuple[Measurement, Measurement] | None:
+) -> SharedAssay | None:
     """One assay measuring both members, uncensored on both sides.
 
     This is the filter that makes a pair worth anything. Where an assay reports
     a member more than once, the measurements are taken at their geometric mean
     -- these are log-scale quantities, so an arithmetic mean would be biased
     upward by the weakest replicate.
+
+    **Where several assays qualify, the best-supported one wins**, meaning the
+    one backed by the most measurements across both members. An earlier version
+    took the assay with the LARGEST separation, on the reasoning that a pilot
+    wants clear cases. That reasoning is wrong in a way worth spelling out: the
+    hypothesis under test is that enantiomers separate, so choosing the assay
+    that separates them most puts a thumb on the scale in precisely the
+    direction of the expected result. The effect is not hypothetical -- one
+    pair in the set reads 0.87 or 4.66 depending only on which assay is picked,
+    a 6000-fold difference in the reported effect arising from the selection
+    rule rather than from chemistry.
+
+    Replicate count is a defensible criterion because it is independent of the
+    outcome: it says how well measured the pair is, not how much it differs.
+    Ties break on the assay id, so the choice is deterministic across runs.
     """
+
     def by_assay(measurements: list[Measurement]) -> dict[str, list[Measurement]]:
         grouped: dict[str, list[Measurement]] = {}
         for m in measurements:
@@ -170,7 +203,6 @@ def find_shared_assay(
     def collapse(measurements: list[Measurement]) -> Measurement:
         if len(measurements) == 1:
             return measurements[0]
-        import math
 
         geometric = math.exp(
             sum(math.log(m.standard_value) for m in measurements) / len(measurements)
@@ -185,16 +217,21 @@ def find_shared_assay(
             document_chembl_id=first.document_chembl_id,
         )
 
-    # Where several assays qualify, prefer the one with the largest measured
-    # separation: a pilot is for inspecting clear cases, not average ones.
-    best = max(
-        shared,
-        key=lambda a: abs(
-            collapse(eu_by_assay[a]).standard_value
-            - collapse(di_by_assay[a]).standard_value
-        ),
+    def support(assay_id: str) -> int:
+        return len(eu_by_assay[assay_id]) + len(di_by_assay[assay_id])
+
+    # Outcome-independent criterion, then a deterministic tiebreak. Sorting on
+    # the id rather than relying on set order matters: set iteration order
+    # varies between runs, so a tie would otherwise resolve differently each
+    # time and the pair set would not reproduce.
+    best = max(sorted(shared), key=support)
+
+    return SharedAssay(
+        eutomer=collapse(eu_by_assay[best]),
+        distomer=collapse(di_by_assay[best]),
+        n_shared_assays=len(shared),
+        n_measurements=support(best),
     )
-    return collapse(eu_by_assay[best]), collapse(di_by_assay[best])
 
 
 def fetch_target_uniprot(target_chembl_id: str) -> str | None:
