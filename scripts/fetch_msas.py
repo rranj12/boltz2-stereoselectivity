@@ -69,6 +69,13 @@ def main() -> None:
         "run needs rather than the whole pair set",
     )
     ap.add_argument("--host-url", default="https://api.colabfold.com")
+    ap.add_argument(
+        "--max-chain-length",
+        type=int,
+        default=700,
+        help="must match build_run.py's limit, or this fetches alignments for "
+        "targets the run will not use and skips the ones it will",
+    )
     args = ap.parse_args()
 
     try:
@@ -90,7 +97,11 @@ def main() -> None:
     # will actually use, not an arbitrary slice of 150.
     ordered, seen = [], set()
     for target in pairs.target_chembl_id:
-        if target in sequences and target not in seen:
+        if (
+            target in sequences
+            and target not in seen
+            and len(sequences[target]) <= args.max_chain_length
+        ):
             seen.add(target)
             ordered.append(target)
     wanted = ordered[: args.max_targets]

@@ -16,3 +16,6 @@ results/
 data/pairs/candidates.csv
 data/pairs/rejected.csv
 runs/
+
+# Cached MSAs: large (several MB each), regenerable with scripts/fetch_msas.py
+data/msa/
