@@ -99,3 +99,86 @@ def test_support_counts_both_sides():
         [m("A1", 10), m("A1", 20), m("A1", 30)], [m("A1", 40)]
     )
     assert shared.n_measurements == 4
+
+
+# --- transient empty responses ---------------------------------------------
+
+
+def test_empty_response_is_retried_when_the_page_claims_rows(monkeypatch):
+    """ChEMBL sometimes answers 200 with no rows but a nonzero total_count.
+
+    Taking that at face value silently shrinks the pair set: the pair is
+    recorded as having no shared assay, which looks like a finding rather than
+    a dropped request.
+    """
+    from stereobench import chembl
+
+    responses = [
+        {"activities": [], "page_meta": {"total_count": 2}},
+        {
+            "activities": [
+                {
+                    "assay_chembl_id": "A1",
+                    "standard_type": "Ki",
+                    "standard_value": "10",
+                    "standard_units": "nM",
+                    "standard_relation": "=",
+                    "document_chembl_id": "D1",
+                }
+            ],
+            "page_meta": {"total_count": 2},
+        },
+    ]
+    calls = []
+
+    def fake_get(path, params):
+        calls.append(params)
+        return responses[min(len(calls) - 1, len(responses) - 1)]
+
+    monkeypatch.setattr(chembl, "_get", fake_get)
+    monkeypatch.setattr(chembl.time, "sleep", lambda _: None)
+
+    out = chembl.fetch_activities("CHEMBL1", "CHEMBL2", "Ki")
+
+    assert len(calls) == 2
+    assert len(out) == 1
+
+
+def test_genuinely_empty_response_is_not_retried(monkeypatch):
+    """A compound with no measurements must not cost a second request."""
+    from stereobench import chembl
+
+    calls = []
+
+    def fake_get(path, params):
+        calls.append(params)
+        return {"activities": [], "page_meta": {"total_count": 0}}
+
+    monkeypatch.setattr(chembl, "_get", fake_get)
+    out = chembl.fetch_activities("CHEMBL1", "CHEMBL2", "Ki")
+
+    assert len(calls) == 1
+    assert out == []
+
+
+def test_non_nanomolar_units_are_skipped(monkeypatch):
+    from stereobench import chembl
+
+    monkeypatch.setattr(
+        chembl,
+        "_get",
+        lambda path, params: {
+            "activities": [
+                {
+                    "assay_chembl_id": "A1",
+                    "standard_type": "Ki",
+                    "standard_value": "1",
+                    "standard_units": "ug.mL-1",
+                    "standard_relation": "=",
+                    "document_chembl_id": "D1",
+                }
+            ],
+            "page_meta": {"total_count": 1},
+        },
+    )
+    assert chembl.fetch_activities("CHEMBL1", "CHEMBL2", "Ki") == []

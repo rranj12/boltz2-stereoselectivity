@@ -120,6 +120,13 @@ def main() -> None:
             reject(row, "lookup_failed")
             continue
 
+        # Distinguish "ChEMBL returned nothing" from "nothing matched". The
+        # first is usually transient and recoverable; conflating them hides a
+        # shrinking pair set behind a plausible-looking reason.
+        if not eu_acts or not di_acts:
+            reject(row, "no_activities_returned")
+            continue
+
         shared = find_shared_assay(eu_acts, di_acts)
         if shared is None:
             reject(row, "no_shared_uncensored_assay")

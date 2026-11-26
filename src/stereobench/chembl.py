@@ -113,22 +113,39 @@ class Measurement:
 def fetch_activities(
     molecule_chembl_id: str, target_chembl_id: str, standard_type: str
 ) -> list[Measurement]:
-    """Every nM measurement of one compound against one target, by assay."""
-    payload = _get(
-        "activity.json",
-        {
-            "molecule_chembl_id": molecule_chembl_id,
-            "target_chembl_id": target_chembl_id,
-            "standard_type": standard_type,
-            "limit": 1000,
-            "only": (
-                "assay_chembl_id,standard_type,standard_value,standard_units,"
-                "standard_relation,document_chembl_id"
-            ),
-        },
-    )
+    """Every nM measurement of one compound against one target, by assay.
+
+    Retries when the response is empty but claims it should not be. ChEMBL
+    occasionally answers 200 with no `activities` while `page_meta.total_count`
+    says there are some; the HTTP layer sees nothing wrong, so without this
+    check the caller cannot tell a transient empty page from a compound that
+    genuinely has no measurements. The consequence is not an error but a
+    quietly smaller pair set: seven pairs vanished between two runs of the
+    curation this way, each recorded as `no_shared_uncensored_assay`, and all
+    seven resolved normally when queried again.
+    """
+    params = {
+        "molecule_chembl_id": molecule_chembl_id,
+        "target_chembl_id": target_chembl_id,
+        "standard_type": standard_type,
+        "limit": 1000,
+        "only": (
+            "assay_chembl_id,standard_type,standard_value,standard_units,"
+            "standard_relation,document_chembl_id"
+        ),
+    }
+
+    payload = _get("activity.json", params)
+    activities = payload.get("activities", [])
+    total = (payload.get("page_meta") or {}).get("total_count")
+
+    if not activities and total:
+        time.sleep(REQUEST_DELAY_S * 4)
+        payload = _get("activity.json", params)
+        activities = payload.get("activities", [])
+
     out = []
-    for activity in payload.get("activities", []):
+    for activity in activities:
         value, units = activity.get("standard_value"), activity.get("standard_units")
         if value is None or units != "nM":
             continue
