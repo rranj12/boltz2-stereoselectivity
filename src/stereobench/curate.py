@@ -229,12 +229,46 @@ def rank_for_pilot(candidates: pd.DataFrame) -> pd.DataFrame:
     A pilot wants pairs a human can check, not a representative sample. Fewer
     stereocentres means an unambiguous CIP reading off the predicted geometry
     and fewer `partial` verdicts; a human target means a sequence is easy to
-    find. Sorting is deliberate rather than random for exactly that reason --
-    these are the pairs someone will inspect one by one.
+    find.
+
+    **The two arms must sort delta in OPPOSITE directions**, and getting this
+    wrong is silent. The tail arm wants the largest separations, where a flat
+    prediction is unambiguous. The near-zero arm wants the SMALLEST ones --
+    its whole purpose is pairs where the model is supposed to be flat. Sorting
+    both descending fills the near-zero arm with pairs pressed against the 2x
+    tier ceiling, which is the least near-zero sample available and tests
+    nothing. A first version of this function did exactly that, and the
+    symptom was a third of the pair set landing within 0.01 of log10(2).
     """
     ranked = candidates.copy()
     ranked["is_human"] = ranked["organism"].eq("Homo sapiens")
-    return ranked.sort_values(
-        ["group", "is_human", "n_stereocenters", "delta_pact"],
-        ascending=[True, False, True, False],
-    ).reset_index(drop=True)
+    # Sort key that is descending for the tail arm and ascending for near-zero.
+    ranked["_delta_rank"] = ranked.apply(
+        lambda r: -r["delta_pact"] if r["group"] == "tail" else r["delta_pact"],
+        axis=1,
+    )
+    ranked = ranked.sort_values(
+        ["group", "is_human", "n_stereocenters", "_delta_rank"],
+        ascending=[True, False, True, True],
+    )
+    return ranked.drop(columns=["_delta_rank"]).reset_index(drop=True)
+
+
+# Concentrations that recur as "highest tested" rather than as measurements.
+# A compound reported inactive at the top of a dilution series often lands in
+# ChEMBL with relation "=" at the cutoff, so the qualifier filter cannot see
+# it. These are flagged rather than dropped: the value may be genuine, and
+# that is a judgement for whoever inspects the pair.
+SUSPICIOUS_CUTOFFS_NM = (
+    1e4, 2e4, 2.5e4, 3e4, 5e4, 1e5, 2e5, 2.5e5, 3e5, 5e5, 1e6, 1e7,
+)
+
+
+def looks_like_a_cutoff(value: float, *, tolerance: float = 1e-6) -> bool:
+    """True for values sitting exactly on a common assay ceiling."""
+    if value is None or pd.isna(value):
+        return False
+    return any(
+        abs(value - cutoff) <= tolerance * max(cutoff, 1.0)
+        for cutoff in SUSPICIOUS_CUTOFFS_NM
+    )

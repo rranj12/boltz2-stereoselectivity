@@ -26,7 +26,7 @@ from stereobench.boltz_io import (
     affinity_atom_count,
 )
 from stereobench.chembl import fetch_activities, fetch_smiles, find_shared_assay
-from stereobench.curate import pact_from_nm
+from stereobench.curate import looks_like_a_cutoff, pact_from_nm
 from stereobench.stereo import classify_pair
 
 
@@ -64,6 +64,11 @@ def main() -> None:
                 "distomer_chembl_id": row.distomer_chembl_id,
                 "target_chembl_id": row.target_chembl_id,
                 "group": row.group,
+                # Flagged, not dropped: an "inactive at top concentration"
+                # reading often reaches ChEMBL with relation "=", so the
+                # qualifier filter cannot catch it.
+                "suspicious_cutoff": looks_like_a_cutoff(eu_value)
+                or looks_like_a_cutoff(di_value),
                 "reason": reason,
             }
         )
@@ -157,6 +162,11 @@ def main() -> None:
                 "n_atoms": n_atoms,
                 "within_recommended_atoms": n_atoms <= AFFINITY_RECOMMENDED_MAX_ATOMS,
                 "group": row.group,
+                # Flagged, not dropped: an "inactive at top concentration"
+                # reading often reaches ChEMBL with relation "=", so the
+                # qualifier filter cannot catch it.
+                "suspicious_cutoff": looks_like_a_cutoff(eu_value)
+                or looks_like_a_cutoff(di_value),
                 "document_chembl_id": eu_m.document_chembl_id,
             }
         )
@@ -180,6 +190,10 @@ def main() -> None:
               f"max {pairs.delta_pact.max():.2f}")
         print(f"targets: {pairs.target_chembl_id.nunique()}")
         print(f"within recommended 56 atoms: {pairs.within_recommended_atoms.sum()}")
+        print(f"flagged on a cutoff value  : {pairs.suspicious_cutoff.sum()}")
+        near_two = (pairs.delta_pact.sub(0.30103).abs() < 0.01).sum()
+        print(f"within 0.01 of exactly 2x  : {near_two}"
+              "   <- a large count means the arms were sampled at a tier edge")
     print(f"\nrejections: {len(rejects)}")
     if rejects:
         print(pd.DataFrame(rejects).reason.str.split(":").str[0].value_counts().to_string())
